@@ -64,6 +64,7 @@ import urllib.parse
 import re
 import logging
 import os
+import time
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import Select
 from selenium.webdriver.common.keys import Keys
@@ -76,6 +77,7 @@ logger = logging.getLogger('amazon_scrape')
 class Domain:
     COM = 'com'
     CO_UK = 'co.uk'
+    ES = 'es'
 
 
 class Scraper(scrape_lib.Scraper):
@@ -100,11 +102,12 @@ class Scraper(scrape_lib.Scraper):
 
     def login(self):
         logger.info('Initiating log in')
+        print('https://www.amazon.' + self.amazon_domain)
         self.driver.get('https://www.amazon.' + self.amazon_domain)
         if self.logged_in:
             return
 
-        sign_out_links = self.find_elements_by_descendant_partial_text('Sign Out', 'a')
+        sign_out_links = self.find_elements_by_descendant_partial_text('Cerrar sesión', 'a')
         if len(sign_out_links) > 0:
             logger.info('You must be already logged in!')
             self.logged_in = True
@@ -112,7 +115,7 @@ class Scraper(scrape_lib.Scraper):
 
         logger.info('Looking for sign-in link')
         sign_in_links, = self.wait_and_return(
-            lambda: self.find_visible_elements_by_descendant_partial_text('Sign in', 'a')
+            lambda: self.find_visible_elements_by_descendant_partial_text('Identificarse', 'a')
         )
 
         self.click(sign_in_links[0])
@@ -121,6 +124,7 @@ class Scraper(scrape_lib.Scraper):
             lambda: self.find_visible_elements(By.XPATH, '//input[@type="email"]')
         )
         username.send_keys(self.credentials['username'])
+        username.send_keys(Keys.ENTER)
 
         logger.info('Looking for password link')
         (password, ), = self.wait_and_return(
@@ -151,10 +155,18 @@ class Scraper(scrape_lib.Scraper):
             while True:
 
                 def invoice_finder():
-                    return self.driver.find_elements(By.XPATH, '//a[contains(@href, "orderID=")]')
+                    invoices = []
+                    factura_links = self.driver.find_elements(By.XPATH, '//a[contains(., "Factura")]')
+                    print("Found {} Factura links")
+                    for link in factura_links:
+                      link.click()
+                      time.sleep(1)
+                      invoices.extend(self.driver.find_elements(By.XPATH, '//a[contains(@href, "orderID=")]'))
+                    return invoices
 
                 if initial_iteration:
                     invoices = invoice_finder()
+                    print("Invoices found: {}".format(len(invoices)))
                 else:
                     invoices, = self.wait_and_return(invoice_finder)
                 initial_iteration = False
@@ -185,15 +197,19 @@ class Scraper(scrape_lib.Scraper):
                     order_ids_seen.add(order_id)
 
                 # Find next link
-                next_links = self.find_elements_by_descendant_text_match(
-                    '. = "Next"', 'a', only_displayed=True)
+                next_links = self.find_visible_elements(By.XPATH, "//a[contains(text(), 'Siguiente')]")
                 if len(next_links) == 0:
                     logger.info('Found no more pages')
                     break
                 if len(next_links) != 1:
-                    raise RuntimeError('More than one next link found')
+                    for link in next_links:
+                        print("Link: {}".format(link.text))
+                    print('More than one next link found')
+                    found_next=next_links[0]
+                else:
+                    found_next=next_links[0]
                 with self.wait_for_page_load():
-                    self.click(next_links[0])
+                    self.click(found_next)
 
         def retrieve_all_order_groups():
             order_select_index = 0
@@ -219,13 +235,13 @@ class Scraper(scrape_lib.Scraper):
                     break
 
         if regular:
-            orders_text = "Your Orders" if self.amazon_domain == Domain.CO_UK else "Orders"
+            orders_text = "Your Orders" if self.amazon_domain == Domain.CO_UK else "Mis pedidos" if self.amazon_domain == Domain.ES else "Orders"
             # on co.uk, orders link is hidden behind the menu, hence not directly clickable
             (orders_link,), = self.wait_and_return(
                 lambda: self.find_elements_by_descendant_text_match('. = "{}"'.format(orders_text), 'a', only_displayed=False)
             )
             link = orders_link.get_attribute('href')
-            scrape_lib.retry(lambda: self.driver.get(link), retry_delay=2)
+            scrape_lib.retry(lambda: self.driver.get(link), retry_delay=1)
 
             retrieve_all_order_groups()
 
@@ -255,7 +271,7 @@ class Scraper(scrape_lib.Scraper):
                     return source
                 return None
 
-            page_source, = self.wait_and_return(get_source)
+            page_source = self.driver.page_source
             if order_id not in page_source:
                 raise ValueError('Failed to retrieve information for order %r'
                                  % (order_id, ))

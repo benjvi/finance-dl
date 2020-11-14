@@ -396,7 +396,7 @@ def temp_scraper(scraper_type, *args, headless=True, connect=None,
         shutil.rmtree(download_dir)
 
 
-def retry(func, num_tries=3, retry_delay=0):
+def retry(func, num_tries=1, retry_delay=0):
     while True:
         try:
             return func()
